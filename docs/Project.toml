@@ -1,0 +1,6 @@
+[deps]
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+PWMPrettyPrint = "1cf8b4df-845c-448c-a3f0-11784a558759"
+
+[sources]
+PWMPrettyPrint = {path = ".."}
