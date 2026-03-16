@@ -199,12 +199,12 @@ function _render_canvas(io::IO, canvas,
     br_rows = height          # each braille row = 4 pixel rows → pixel_h = 4*height
     br_cols = canvas_w ÷ 2   # each braille col = 2 pixel cols
 
-    # y-axis
+    # y-axis: 3 evenly spaced labels – top, middle, bottom
     fmt_ic(v) = isinteger(v) ? string(Int(v)) : string(Int(round(v)))
     axis_labels = Dict{Int,String}()
-    axis_labels[1]             = lpad(fmt_ic(max_ic), 2)
-    axis_labels[br_rows]       = lpad("0", 2)
-    axis_labels[br_rows÷2 + 1] = lpad(fmt_ic(max_ic / 2), 2)
+    axis_labels[1]                  = lpad(fmt_ic(max_ic), 2)
+    axis_labels[br_rows]            = lpad("0", 2)
+    axis_labels[(1 + br_rows + 1) ÷ 2] = lpad(fmt_ic(max_ic / 2), 2)
 
     for br_r in 1:br_rows
         label = get(axis_labels, br_r, "  ")
@@ -252,9 +252,11 @@ function _render_canvas(io::IO, canvas,
     char_w = col_w ÷ 2
     print(io, "  └")
     for j in 1:n_pos
-        s   = string(j)
-        pad = char_w - length(s)
-        print(io, ' '^div(pad, 2), s, ' '^(pad - div(pad, 2)))
+        s      = string(j)
+        pad    = char_w - length(s)
+        lpad_n = div(pad, 2)
+        rpad_n = pad - lpad_n
+        print(io, ' '^lpad_n, s, ' '^rpad_n)
     end
     println(io)
 end
@@ -287,8 +289,8 @@ function logoshow end
 function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
                   background::Union{Nothing,AbstractVector{<:Real}} = nothing,
                   rna::Bool      = false,
-                  height::Int    = 20,
-                  col_width::Int = 12)
+                  height::Int    = 5,
+                  col_width::Int = 10)
 
     col_width = col_width + (col_width & 1)  # ensure even
 
