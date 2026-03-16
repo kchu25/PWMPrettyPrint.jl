@@ -51,11 +51,29 @@ logoshow(pfm; rna=true)   # uses A/C/G/U alphabet
 | `height` | `5` | Terminal rows (effective pixel height = 4 × height) |
 | `col_width` | `10` | Pixel columns per position (must be even) |
 | `rna` | `false` | Use A/C/G/U instead of A/C/G/T |
-| `background` | uniform | Background nucleotide frequencies for IC calculation |
+| `background` | uniform 0.25 | Background nucleotide frequencies for IC calculation |
 
 ```julia
 logoshow(pfm; height=10, col_width=14)
 ```
+
+### Custom background frequencies
+
+By default IC is computed against a uniform background (0.25 each). Pass a
+4-element vector `[A, C, G, T]` to use genome-specific frequencies instead:
+
+```julia
+# Human genome: ~41% GC content
+bg = [0.295, 0.205, 0.205, 0.295]   # [A, C, G, T]
+logoshow(pfm; background=bg)
+
+# or with the PWM wrapper
+w = PWM(pfm; background=bg)
+w
+```
+
+Letters whose frequency barely exceeds the background will be drawn shorter,
+making the logo more informative for GC-rich or AT-rich genomes.
 
 ## Colours
 
