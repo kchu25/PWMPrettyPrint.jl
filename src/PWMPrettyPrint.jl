@@ -4,76 +4,81 @@ export logoshow, PWM
 
 # ══════════════════════════════════════════════════════════════
 #  Glyph polygon data (from EntroPlots.jl / gglogo)
-#  Each letter is a closed polygon in the unit square [0,1]².
 # ══════════════════════════════════════════════════════════════
-
 include("glyphs.jl")
 
 # ══════════════════════════════════════════════════════════════
-#  Information‑content helpers  (same maths as EntroPlots.jl)
+#  Information-content helpers
 # ══════════════════════════════════════════════════════════════
 
-"""Per-letter information content for one column of a PFM."""
 function ic_column(col, bg; ϵ=1e-20)
-    return col .* log2.((col .+ ϵ) ./ bg)
+    col .* log2.((col .+ ϵ) ./ bg)
 end
 
-"""Total information content of a column (sum of per-letter ICs)."""
 function total_ic(col; bg=fill(0.25, length(col)))
-    return sum(ic_column(col, bg))
+    sum(ic_column(col, bg))
 end
 
 # ══════════════════════════════════════════════════════════════
-#  Default colour palettes  (RGB tuples for 24-bit ANSI)
+#  Colour palettes – vivid, classic logo colours
 # ══════════════════════════════════════════════════════════════
 
 const DNA_COLORS = Dict(
-    'A' => (6, 94, 42),     # dark green  (#065E2A)
-    'C' => (14, 63, 115),   # dark blue   (#0E3F73)
-    'G' => (194, 155, 37),  # gold/amber  (#C29B25)
-    'T' => (143, 2, 2),     # dark red    (#8F0202)
+    'A' => (0,   200,  50),   # green
+    'C' => (20,  100, 220),   # blue
+    'G' => (230, 160,   0),   # amber
+    'T' => (220,  20,  20),   # red
 )
-
 const RNA_COLORS = Dict(
-    'A' => (6, 94, 42),
-    'C' => (14, 63, 115),
-    'G' => (194, 155, 37),
-    'U' => (161, 4, 31),    # (#A1041F)
+    'A' => (0,   200,  50),
+    'C' => (20,  100, 220),
+    'G' => (230, 160,   0),
+    'U' => (220,  20,  20),
 )
 
 const DNA_LETTERS = ['A', 'C', 'G', 'T']
 const RNA_LETTERS = ['A', 'C', 'G', 'U']
 
 # ══════════════════════════════════════════════════════════════
-#  ANSI helpers
+#  ANSI 24-bit colour helpers
 # ══════════════════════════════════════════════════════════════
 
-_fg(r, g, b)      = "\e[38;2;$(r);$(g);$(b)m"
-_bg(r, g, b)      = "\e[48;2;$(r);$(g);$(b)m"
-const RESET        = "\e[0m"
+_fg(r, g, b) = "\e[38;2;$(r);$(g);$(b)m"
+_bg(r, g, b) = "\e[48;2;$(r);$(g);$(b)m"
+const RESET   = "\e[0m"
 
 # ══════════════════════════════════════════════════════════════
-#  Polygon rasterizer
+#  Braille sub-pixel layout
 # ══════════════════════════════════════════════════════════════
 #
-# Given the polygon vertices (xs, ys) in [0,1]² and a target
-# bitmap of size (rows, cols), fill every pixel whose centre
-# falls inside the polygon.  Uses the classical ray-casting
-# (even-odd) point-in-polygon test.
+#  Each braille character cell = 2 columns × 4 rows of dots.
+#  Unicode U+2800 + bitmask, where:
+#
+#    col 0 (left)   col 1 (right)
+#      dot1 (bit0)    dot4 (bit3)   ← pixel row 0 (top)
+#      dot2 (bit1)    dot5 (bit4)   ← pixel row 1
+#      dot3 (bit2)    dot6 (bit5)   ← pixel row 2
+#      dot7 (bit6)    dot8 (bit7)   ← pixel row 3 (bottom)
+#
+#  So a (sub_row, sub_col) pixel maps to:
 
-"""
-    point_in_polygon(px, py, vx, vy)
+const BRAILLE_BIT = (
+    # sub_col=0 (left)          sub_col=1 (right)
+    (0, 3),   # sub_row 0
+    (1, 4),   # sub_row 1
+    (2, 5),   # sub_row 2
+    (6, 7),   # sub_row 3
+)
 
-Ray-casting even-odd test.  `vx`, `vy` are the polygon vertex
-vectors (closed – first vertex == last vertex is fine but not
-required).
-"""
+# ══════════════════════════════════════════════════════════════
+#  Fast binary polygon rasterizer  (1 sample per pixel)
+# ══════════════════════════════════════════════════════════════
+
 function point_in_polygon(px::Float64, py::Float64,
                           vx::Vector{Float64}, vy::Vector{Float64})
-    n = length(vx)
     inside = false
-    j = n
-    @inbounds for i in 1:n
+    j = length(vx)
+    @inbounds for i in eachindex(vx)
         yi, yj = vy[i], vy[j]
         xi, xj = vx[i], vx[j]
         if ((yi > py) != (yj > py)) &&
@@ -82,97 +87,70 @@ function point_in_polygon(px::Float64, py::Float64,
         end
         j = i
     end
-    return inside
+    inside
 end
 
-"""
-    rasterize_glyph(vx, vy, rows, cols) -> BitMatrix
-
-Rasterize a polygon into a `rows × cols` bitmap.
-Row 1 = top of glyph (y ≈ 1), row `rows` = bottom (y ≈ 0).
-"""
-function rasterize_glyph(vx::Vector{Float64}, vy::Vector{Float64},
-                         rows::Int, cols::Int)
-    bmp = falses(rows, cols)
-    for r in 1:rows
-        # centre of pixel row r  (row 1 = top → y near 1.0)
-        py = 1.0 - (r - 0.5) / rows
-        for c in 1:cols
-            px = (c - 0.5) / cols
-            if point_in_polygon(px, py, vx, vy)
-                bmp[r, c] = true
-            end
-        end
-    end
-    return bmp
-end
-
-# Pre-rasterized glyph cache:  letter → (rows, cols) → BitMatrix
-# We cache so repeated calls don't re-rasterize.
-const _GLYPH_CACHE = Dict{Tuple{String, Int, Int}, BitMatrix}()
+# Cache: (letter, rows, cols) → BitMatrix
+const _GLYPH_CACHE = Dict{Tuple{String,Int,Int}, BitMatrix}()
 
 function get_glyph_bitmap(letter::String, rows::Int, cols::Int)
-    key = (letter, rows, cols)
-    get!(_GLYPH_CACHE, key) do
+    get!(_GLYPH_CACHE, (letter, rows, cols)) do
         glyph = get(GLYPHS, letter, nothing)
-        if glyph === nothing
-            return falses(rows, cols)
+        glyph === nothing && return falses(rows, cols)
+        vx = Float64.(glyph.x)
+        vy = Float64.(glyph.y)
+        bmp = falses(rows, cols)
+        for r in 1:rows
+            py = 1.0 - (r - 0.5) / rows
+            for c in 1:cols
+                px = (c - 0.5) / cols
+                bmp[r, c] = point_in_polygon(px, py, vx, vy)
+            end
         end
-        rasterize_glyph(Float64.(glyph.x), Float64.(glyph.y), rows, cols)
+        bmp
     end
 end
 
 # ══════════════════════════════════════════════════════════════
-#  Compose a full logo into a pixel canvas
+#  Canvas: pixel_h × canvas_w grid, each cell = (R,G,B) UInt8
+#          (0,0,0) means empty / background
 # ══════════════════════════════════════════════════════════════
-#
-# Canvas:  pixel_h  rows  ×  (col_width * n_pos)  columns
-# Each cell stores an RGB tuple  (0,0,0) = transparent/background.
-
-const BG_PIXEL = (0, 0, 0)
 
 function _build_canvas(pfm, letters, colors, bg_freq,
-                       pixel_h::Int, col_width::Int)
-    n_chars = length(letters)
-    n_pos   = size(pfm, 2)
-    max_ic  = log2(n_chars)
-    canvas_w = col_width * n_pos
+                       pixel_h::Int, col_w::Int)
+    n_chars  = length(letters)
+    n_pos    = size(pfm, 2)
+    max_ic   = log2(n_chars)
+    canvas_w = col_w * n_pos
 
-    # canvas stores RGB per pixel; (0,0,0) = empty
-    canvas = fill(BG_PIXEL, pixel_h, canvas_w)
+    canvas = zeros(UInt8, pixel_h, canvas_w, 3)   # R/G/B planes
 
     for j in 1:n_pos
-        col = @view pfm[:, j]
-        ics = ic_column(col, bg_freq)
+        col   = @view pfm[:, j]
+        ics   = ic_column(col, bg_freq)
+        order = sortperm(ics)          # smallest IC → bottom of stack
 
-        # sort by IC ascending → smallest at bottom, tallest on top
-        order = sortperm(ics)
-
-        # column x-range on canvas
-        x0 = (j - 1) * col_width + 1
-        x1 = j * col_width
-
-        y_cursor = pixel_h  # bottom of canvas (row index)
+        x0       = (j - 1) * col_w + 1
+        y_cursor = pixel_h             # start at the very bottom
 
         for idx in order
-            ic_val = max(ics[idx], 0.0)
-            frac   = ic_val / max_ic                # fraction of full height
-            letter_h = round(Int, frac * pixel_h)   # pixel rows for this letter
+            ic_val   = max(ics[idx], 0.0)
+            letter_h = round(Int, ic_val / max_ic * pixel_h)
             letter_h <= 0 && continue
 
-            letter = string(letters[idx])
-            rgb    = colors[letters[idx]]
+            letter    = string(letters[idx])
+            r0, g0, b0 = colors[letters[idx]]
+            bmp       = get_glyph_bitmap(letter, letter_h, col_w)
 
-            # rasterize glyph at (letter_h × col_width)
-            bmp = get_glyph_bitmap(letter, letter_h, col_width)
-
-            # paint onto canvas
             for lr in 1:letter_h
-                cr = y_cursor - letter_h + lr   # canvas row
+                cr = y_cursor - letter_h + lr
                 cr < 1 && continue
-                for lc in 1:col_width
+                for lc in 1:col_w
                     if bmp[lr, lc]
-                        canvas[cr, x0 + lc - 1] = rgb
+                        xc = x0 + lc - 1
+                        canvas[cr, xc, 1] = r0
+                        canvas[cr, xc, 2] = g0
+                        canvas[cr, xc, 3] = b0
                     end
                 end
             end
@@ -180,72 +158,103 @@ function _build_canvas(pfm, letters, colors, bg_freq,
         end
     end
 
-    return canvas
+    canvas
 end
 
 # ══════════════════════════════════════════════════════════════
-#  Render canvas to terminal using half-block characters
+#  Render to terminal using braille  (2 px wide × 4 px tall / char)
 # ══════════════════════════════════════════════════════════════
 #
-# Each printed row encodes TWO pixel rows using '▀':
-#   foreground = top pixel colour
-#   background = bottom pixel colour
-# This doubles effective resolution.
+#  Each printed character cell covers a 2×4 block of canvas pixels.
+#  We pick the most-common non-background colour in that block as the
+#  foreground, then encode all lit pixels as a single braille glyph
+#  in that colour.  Background pixels remain black (terminal default).
+#
+#  Result: effective resolution = col_w/2 chars wide × pixel_h/4 rows tall
+#          (with the same number of terminal characters as before but
+#           4× more pixel information encoded per row).
 
-function _render_canvas(io::IO, canvas::Matrix{NTuple{3,Int}},
-                        height::Int, col_width::Int, n_pos::Int,
+function _dominant_color(canvas, rows, cols, r0, r1, c0, c1)
+    # tally non-zero pixels; return the most frequent colour
+    counts = Dict{NTuple{3,UInt8}, Int}()
+    @inbounds for r in r0:r1, c in c0:c1
+        rv = canvas[r, c, 1]
+        gv = canvas[r, c, 2]
+        bv = canvas[r, c, 3]
+        (rv == 0 && gv == 0 && bv == 0) && continue
+        key = (rv, gv, bv)
+        counts[key] = get(counts, key, 0) + 1
+    end
+    isempty(counts) && return nothing
+    argmax(counts)
+end
+
+function _render_canvas(io::IO, canvas,
+                        height::Int, col_w::Int, n_pos::Int,
                         max_ic::Float64)
-    pixel_h = size(canvas, 1)
-
-    # y-axis labels
-    axis_labels = Dict{Int,String}()
-    axis_labels[1]      = lpad(string(round(max_ic; digits=1)), 4)
-    axis_labels[height]  = lpad("0", 4)
-    mid = div(height, 2) + 1
-    axis_labels[mid]     = lpad(string(round(max_ic / 2; digits=1)), 4)
-
+    pixel_h  = size(canvas, 1)
     canvas_w = size(canvas, 2)
 
-    for row in 1:height
-        # y-axis
-        label = get(axis_labels, row, "    ")
+    # Number of braille character rows/cols
+    br_rows = height          # each braille row = 4 pixel rows → pixel_h = 4*height
+    br_cols = canvas_w ÷ 2   # each braille col = 2 pixel cols
+
+    # y-axis
+    fmt_ic(v) = isinteger(v) ? string(Int(v)) : string(Int(round(v)))
+    axis_labels = Dict{Int,String}()
+    axis_labels[1]             = lpad(fmt_ic(max_ic), 2)
+    axis_labels[br_rows]       = lpad("0", 2)
+    axis_labels[br_rows÷2 + 1] = lpad(fmt_ic(max_ic / 2), 2)
+
+    for br_r in 1:br_rows
+        label = get(axis_labels, br_r, "  ")
         print(io, label, "│")
 
-        top_r = 2 * row - 1
-        bot_r = 2 * row
+        # pixel rows covered by this braille row
+        pr0 = (br_r - 1) * 4 + 1
+        pr1 = min(br_r * 4, pixel_h)
 
-        for c in 1:canvas_w
-            top_px = top_r <= pixel_h ? canvas[top_r, c] : BG_PIXEL
-            bot_px = bot_r <= pixel_h ? canvas[bot_r, c] : BG_PIXEL
+        for br_c in 1:br_cols
+            # pixel cols covered by this braille col
+            pc0 = (br_c - 1) * 2 + 1
+            pc1 = min(br_c * 2, canvas_w)
 
-            if top_px == BG_PIXEL && bot_px == BG_PIXEL
+            color = _dominant_color(canvas, pixel_h, canvas_w, pr0, pr1, pc0, pc1)
+
+            if color === nothing
                 print(io, ' ')
-            elseif top_px != BG_PIXEL && bot_px != BG_PIXEL
-                # both filled: ▀ with fg=top, bg=bottom
-                tr, tg, tb = top_px
-                br, bg_, bb = bot_px
-                print(io, _fg(tr, tg, tb), _bg(br, bg_, bb), '▀', RESET)
-            elseif top_px != BG_PIXEL
-                # only top filled
-                tr, tg, tb = top_px
-                print(io, _fg(tr, tg, tb), '▀', RESET)
-            else
-                # only bottom filled  → lower half block
-                br, bg_, bb = bot_px
-                print(io, _fg(br, bg_, bb), '▄', RESET)
+                continue
             end
+
+            # Build the braille bitmask
+            mask = 0
+            for sr in 0:3
+                pr = pr0 + sr
+                pr > pixel_h && continue
+                for sc in 0:1
+                    pc = pc0 + sc
+                    pc > canvas_w && continue
+                    if canvas[pr, pc, 1] != 0 || canvas[pr, pc, 2] != 0 || canvas[pr, pc, 3] != 0
+                        mask |= 1 << BRAILLE_BIT[sr+1][sc+1]
+                    end
+                end
+            end
+
+            mask == 0 && (print(io, ' '); continue)
+
+            r0c, g0c, b0c = Int(color[1]), Int(color[2]), Int(color[3])
+            print(io, _fg(r0c, g0c, b0c), Char(0x2800 + mask), RESET)
         end
         println(io)
     end
 
-    # x-axis
-    print(io, "    └")
+    # x-axis – one label per position, spaced col_w/2 chars apart
+    char_w = col_w ÷ 2
+    print(io, "  └")
     for j in 1:n_pos
-        s = string(j)
-        pad = col_width - length(s)
-        pad_l = div(pad, 2)
-        pad_r = pad - pad_l
-        print(io, ' '^pad_l, s, ' '^pad_r)
+        s   = string(j)
+        pad = char_w - length(s)
+        print(io, ' '^div(pad, 2), s, ' '^(pad - div(pad, 2)))
     end
     println(io)
 end
@@ -255,38 +264,33 @@ end
 # ══════════════════════════════════════════════════════════════
 
 """
-    logoshow([io::IO,] pfm; kwargs...)
+    logoshow([io,] pfm; background, rna, height, col_width)
 
-Print a colourful sequence logo of the position-frequency matrix
-`pfm` directly in the terminal, using **glyph-shaped** letters
-rendered with Unicode half-block characters.
+Render a sequence logo directly in the terminal using **braille
+sub-pixel characters** for high resolution and **uniform solid
+colours** (no anti-aliasing blending).
+
+Each braille character encodes a 2 × 4 pixel block, giving
+effectively twice the horizontal and four times the vertical
+pixel density of ordinary text, while remaining fast (binary
+rasterisation, O(pixels) with no supersampling).
 
 # Arguments
-- `pfm`: Matrix where **rows = nucleotides** and **columns = positions**.
-  Each column should sum to ≈ 1.
-- `background`: Background frequencies (default: uniform 0.25 each).
-- `rna::Bool`: Use RNA alphabet (A C G U) instead of DNA (A C G T).
-- `height::Int`: Logo height in **terminal rows** (default 20).
-  Effective vertical resolution is `2 × height` pixels thanks to
-  half-block rendering.
-- `col_width::Int`: Pixel columns per position (default 8).
-
-# Example
-```julia
-pfm = [0.7 0.1 0.1 0.5;
-       0.1 0.8 0.1 0.2;
-       0.1 0.05 0.7 0.2;
-       0.1 0.05 0.1 0.1]
-logoshow(pfm)
-```
+- `pfm`       – 4 × L position-frequency matrix (rows = A/C/G/T).
+- `background`– background frequencies (default: uniform 0.25).
+- `rna`       – use A/C/G/U alphabet (default false).
+- `height`    – terminal rows (default 20; pixel height = 4 × height).
+- `col_width` – pixel columns per position, **must be even** (default 12).
 """
 function logoshow end
 
 function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
-                  background::Union{Nothing,AbstractVector{<:Real}}=nothing,
-                  rna::Bool=false,
-                  height::Int=20,
-                  col_width::Int=8)
+                  background::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                  rna::Bool      = false,
+                  height::Int    = 20,
+                  col_width::Int = 12)
+
+    col_width = col_width + (col_width & 1)  # ensure even
 
     letters = rna ? RNA_LETTERS : DNA_LETTERS
     colors  = rna ? RNA_COLORS  : DNA_COLORS
@@ -294,55 +298,48 @@ function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
     n_pos   = size(pfm, 2)
     max_ic  = log2(n_chars)
 
-    @assert size(pfm, 1) == n_chars "PFM must have $(n_chars) rows (got $(size(pfm,1)))"
+    @assert size(pfm, 1) == n_chars "PFM must have $n_chars rows (got $(size(pfm,1)))"
 
     bg_freq = something(background, fill(1.0 / n_chars, n_chars))
-
-    # effective pixel height = 2 × terminal rows
-    pixel_h = 2 * height
+    pixel_h = 4 * height          # braille rows encode 4 pixel rows each
 
     canvas = _build_canvas(pfm, letters, colors, bg_freq, pixel_h, col_width)
     _render_canvas(io, canvas, height, col_width, n_pos, Float64(max_ic))
-
-    return nothing
+    nothing
 end
 
-# Convenience: print to stdout
-function logoshow(pfm::AbstractMatrix{<:Real}; kwargs...)
-    logoshow(stdout, pfm; kwargs...)
-end
+logoshow(pfm::AbstractMatrix{<:Real}; kw...) = logoshow(stdout, pfm; kw...)
 
 # ══════════════════════════════════════════════════════════════
-#  PWM wrapper for automatic pretty-printing
+#  PWM wrapper – auto pretty-print in REPL
 # ══════════════════════════════════════════════════════════════
 
 """
     PWM(pfm; rna=false, background=nothing)
 
-Lightweight wrapper so that `display(PWM(pfm))` shows a colourful
-terminal sequence logo.
+Wraps a position-frequency matrix so that displaying it in the
+REPL prints a colourful terminal sequence logo.
 """
 struct PWM{T<:Real}
     pfm::Matrix{T}
     rna::Bool
-    background::Union{Nothing, Vector{T}}
+    background::Union{Nothing,Vector{T}}
 end
 
-function PWM(pfm::AbstractMatrix{T}; rna::Bool=false,
-             background::Union{Nothing,AbstractVector{<:Real}}=nothing) where T<:Real
+function PWM(pfm::AbstractMatrix{T}; rna::Bool = false,
+             background::Union{Nothing,AbstractVector{<:Real}} = nothing) where T<:Real
     bg = isnothing(background) ? nothing : Vector{T}(background)
-    return PWM{T}(Matrix{T}(pfm), rna, bg)
+    PWM{T}(Matrix{T}(pfm), rna, bg)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", w::PWM)
-    printstyled(io, "PWM ", bold=true)
-    println(io, "(", size(w.pfm, 1), "×", size(w.pfm, 2), " ",
+    printstyled(io, "PWM", bold=true)
+    println(io, " (", size(w.pfm,1), "×", size(w.pfm,2), " ",
             w.rna ? "RNA" : "DNA", ")")
     logoshow(io, w.pfm; rna=w.rna, background=w.background)
 end
 
-function Base.show(io::IO, w::PWM)
-    print(io, "PWM(", size(w.pfm, 1), "×", size(w.pfm, 2), ")")
-end
+Base.show(io::IO, w::PWM) =
+    print(io, "PWM(", size(w.pfm,1), "×", size(w.pfm,2), ")")
 
 end
