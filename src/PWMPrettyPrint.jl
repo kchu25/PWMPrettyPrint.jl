@@ -3,7 +3,7 @@ module PWMPrettyPrint
 export logoshow, PWM
 
 # ══════════════════════════════════════════════════════════════
-#  Glyph polygon data (from EntroPlots.jl / gglogo)
+#  Glyph polygon data (from LogoPlots.jl / Benjamin Doran)
 # ══════════════════════════════════════════════════════════════
 include("glyphs.jl")
 
