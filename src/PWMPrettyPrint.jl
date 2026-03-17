@@ -189,9 +189,9 @@ function _dominant_color(canvas, rows, cols, r0, r1, c0, c1)
     argmax(counts)
 end
 
-function _render_canvas(io::IO, canvas,
-                        height::Int, col_w::Int, n_pos::Int,
-                        max_ic::Float64)
+function _render_canvas_lines(canvas,
+                              height::Int, col_w::Int, n_pos::Int,
+                              max_ic::Float64)
     pixel_h  = size(canvas, 1)
     canvas_w = size(canvas, 2)
 
@@ -206,9 +206,12 @@ function _render_canvas(io::IO, canvas,
     axis_labels[br_rows]            = lpad("0", 2)
     axis_labels[(1 + br_rows + 1) ÷ 2] = lpad(fmt_ic(max_ic / 2), 2)
 
+    lines = String[]
+
     for br_r in 1:br_rows
+        buf = IOBuffer()
         label = get(axis_labels, br_r, "  ")
-        print(io, label, "│")
+        print(buf, label, "│")
 
         # pixel rows covered by this braille row
         pr0 = (br_r - 1) * 4 + 1
@@ -222,7 +225,7 @@ function _render_canvas(io::IO, canvas,
             color = _dominant_color(canvas, pixel_h, canvas_w, pr0, pr1, pc0, pc1)
 
             if color === nothing
-                print(io, ' ')
+                print(buf, ' ')
                 continue
             end
 
@@ -240,57 +243,44 @@ function _render_canvas(io::IO, canvas,
                 end
             end
 
-            mask == 0 && (print(io, ' '); continue)
-
-            r0c, g0c, b0c = Int(color[1]), Int(color[2]), Int(color[3])
-            print(io, _fg(r0c, g0c, b0c), Char(0x2800 + mask), RESET)
+            if mask == 0
+                print(buf, ' ')
+            else
+                r0c, g0c, b0c = Int(color[1]), Int(color[2]), Int(color[3])
+                print(buf, _fg(r0c, g0c, b0c), Char(0x2800 + mask), RESET)
+            end
         end
-        println(io)
+        push!(lines, String(take!(buf)))
     end
 
-    # x-axis – one label per position, spaced col_w/2 chars apart
+    # x-axis
+    buf = IOBuffer()
     char_w = col_w ÷ 2
-    print(io, "  └")
+    print(buf, "  └")
     for j in 1:n_pos
         s      = string(j)
         pad    = char_w - length(s)
         lpad_n = div(pad, 2)
         rpad_n = pad - lpad_n
-        print(io, ' '^lpad_n, s, ' '^rpad_n)
+        print(buf, ' '^lpad_n, s, ' '^rpad_n)
     end
-    println(io)
+    push!(lines, String(take!(buf)))
+
+    lines
 end
 
-# ══════════════════════════════════════════════════════════════
-#  Public API
-# ══════════════════════════════════════════════════════════════
+# Helper: visible width of a string (strip ANSI escapes)
+function _visible_width(s::AbstractString)
+    length(replace(s, r"\e\[[0-9;]*m" => ""))
+end
 
-"""
-    logoshow([io,] pfm; background, rna, height, col_width)
-
-Render a sequence logo directly in the terminal using **braille
-sub-pixel characters** for high resolution and **uniform solid
-colours** (no anti-aliasing blending).
-
-Each braille character encodes a 2 × 4 pixel block, giving
-effectively twice the horizontal and four times the vertical
-pixel density of ordinary text, while remaining fast (binary
-rasterisation, O(pixels) with no supersampling).
-
-# Arguments
-- `pfm`       – 4 × L position-frequency matrix (rows = A/C/G/T).
-- `background`– background frequencies (default: uniform 0.25).
-- `rna`       – use A/C/G/U alphabet (default false).
-- `height`    – terminal rows (default 20; pixel height = 4 × height).
-- `col_width` – pixel columns per position, **must be even** (default 12).
-"""
-function logoshow end
-
-function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
-                  background::Union{Nothing,AbstractVector{<:Real}} = nothing,
-                  rna::Bool      = false,
-                  height::Int    = 5,
-                  col_width::Int = 10)
+# Build the full set of lines for one logo (title + canvas + x-axis)
+function _logo_lines(pfm::AbstractMatrix{<:Real};
+                     title::Union{Nothing,String} = nothing,
+                     background::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                     rna::Bool      = false,
+                     height::Int    = 5,
+                     col_width::Int = 10)
 
     col_width = col_width + (col_width & 1)  # ensure even
 
@@ -303,14 +293,131 @@ function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
     @assert size(pfm, 1) == n_chars "PFM must have $n_chars rows (got $(size(pfm,1)))"
 
     bg_freq = something(background, fill(1.0 / n_chars, n_chars))
-    pixel_h = 4 * height          # braille rows encode 4 pixel rows each
+    pixel_h = 4 * height
 
     canvas = _build_canvas(pfm, letters, colors, bg_freq, pixel_h, col_width)
-    _render_canvas(io, canvas, height, col_width, n_pos, Float64(max_ic))
+    lines  = _render_canvas_lines(canvas, height, col_width, n_pos, Float64(max_ic))
+
+    # Prepend title line if provided
+    if title !== nothing
+        # Centre the title over the logo width (use visible width of first canvas line)
+        logo_w = _visible_width(lines[1])
+        padded = lpad(title, div(logo_w + length(title), 2))
+        pushfirst!(lines, padded)
+    end
+
+    lines
+end
+
+# ══════════════════════════════════════════════════════════════
+#  Public API
+# ══════════════════════════════════════════════════════════════
+
+"""
+    logoshow([io,] pfm; background, rna, height, col_width)
+
+Render a single sequence logo in the terminal.
+
+    logoshow([io,] pfms::AbstractVector; names, per_row, background, rna, height, col_width, gap)
+
+Render multiple logos in a grid layout.
+
+# Single-logo arguments
+- `pfm`       – 4 × L position-frequency matrix (rows = A/C/G/T).
+- `background`– background frequencies (default: uniform 0.25).
+- `rna`       – use A/C/G/U alphabet (default false).
+- `height`    – terminal rows (default 5; pixel height = 4 × height).
+- `col_width` – pixel columns per position, **must be even** (default 10).
+
+# Multi-logo arguments
+- `pfms`      – vector of position-frequency matrices.
+- `names`     – vector of label strings, or `nothing` for auto-numbered titles.
+- `per_row`   – max logos per row (default 3).
+- `gap`       – number of blank columns between side-by-side logos (default 3).
+"""
+function logoshow end
+
+# ─── Single PFM ──────────────────────────────────────────────
+
+function logoshow(io::IO, pfm::AbstractMatrix{<:Real};
+                  background::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                  rna::Bool      = false,
+                  height::Int    = 5,
+                  col_width::Int = 10)
+
+    lines = _logo_lines(pfm; background, rna, height, col_width)
+    for l in lines
+        println(io, l)
+    end
     nothing
 end
 
 logoshow(pfm::AbstractMatrix{<:Real}; kw...) = logoshow(stdout, pfm; kw...)
+
+# ─── Multiple PFMs ───────────────────────────────────────────
+
+function logoshow(io::IO, pfms::AbstractVector{<:AbstractMatrix{<:Real}};
+                  names::Union{Nothing,AbstractVector{<:AbstractString}} = nothing,
+                  per_row::Int   = 3,
+                  gap::Int       = 3,
+                  background::Union{Nothing,AbstractVector{<:Real}} = nothing,
+                  rna::Bool      = false,
+                  height::Int    = 5,
+                  col_width::Int = 10)
+
+    n = length(pfms)
+    @assert n > 0 "Must provide at least one PFM"
+    if names !== nothing
+        @assert length(names) == n "Length of names ($(length(names))) must match number of PFMs ($n)"
+    end
+
+    # Build line arrays for every logo
+    all_lines = Vector{Vector{String}}(undef, n)
+    for i in 1:n
+        title = names !== nothing ? names[i] : "Motif $i"
+        all_lines[i] = _logo_lines(pfms[i]; title, background, rna, height, col_width)
+    end
+
+    # Render in groups of per_row
+    spacer = " "^gap
+    for row_start in 1:per_row:n
+        row_end = min(row_start + per_row - 1, n)
+        group   = all_lines[row_start:row_end]
+
+        # Determine max visible width per logo and max line count
+        max_nlines = maximum(length.(group))
+        widths     = [maximum(_visible_width.(g)) for g in group]
+
+        # Pad shorter logos with blank lines at the bottom
+        for g in group
+            while length(g) < max_nlines
+                push!(g, "")
+            end
+        end
+
+        # Print lines side-by-side
+        for li in 1:max_nlines
+            for (gi, g) in enumerate(group)
+                line = g[li]
+                vw   = _visible_width(line)
+                print(io, line, ' '^max(widths[gi] - vw, 0))
+                if gi < length(group)
+                    print(io, spacer)
+                end
+            end
+            println(io)
+        end
+
+        # Blank line between rows (unless last row)
+        if row_end < n
+            println(io)
+        end
+    end
+    nothing
+end
+
+logoshow(pfms::AbstractVector{<:AbstractMatrix{<:Real}}; kw...) =
+    logoshow(stdout, pfms; kw...)
 
 # ══════════════════════════════════════════════════════════════
 #  PWM wrapper – auto pretty-print in REPL

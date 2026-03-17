@@ -88,4 +88,55 @@ using Test
         show(buf, w)
         @test String(take!(buf)) == "PWM(4×2)"
     end
+
+    # ── Multi-logo tests ─────────────────────────────────────
+    @testset "multi-logo without names" begin
+        pfm1 = [0.7 0.1; 0.1 0.7; 0.1 0.1; 0.1 0.1]
+        pfm2 = [0.1 0.8; 0.8 0.1; 0.05 0.05; 0.05 0.05]
+        buf = IOBuffer()
+        @test logoshow(buf, [pfm1, pfm2]) === nothing
+        output = String(take!(buf))
+        @test length(output) > 0
+        # auto-numbered titles
+        @test occursin("Motif 1", output)
+        @test occursin("Motif 2", output)
+    end
+
+    @testset "multi-logo with names" begin
+        pfm1 = [0.7 0.1; 0.1 0.7; 0.1 0.1; 0.1 0.1]
+        pfm2 = [0.1 0.8; 0.8 0.1; 0.05 0.05; 0.05 0.05]
+        buf = IOBuffer()
+        @test logoshow(buf, [pfm1, pfm2]; names=["TATA", "SP1"]) === nothing
+        output = String(take!(buf))
+        @test occursin("TATA", output)
+        @test occursin("SP1", output)
+    end
+
+    @testset "multi-logo per_row wrapping" begin
+        pfm = [0.7 0.1; 0.1 0.7; 0.1 0.1; 0.1 0.1]
+        pfms = [pfm, pfm, pfm, pfm, pfm]
+        buf = IOBuffer()
+        @test logoshow(buf, pfms; per_row=2) === nothing
+        output = String(take!(buf))
+        # should have all 5 motif titles
+        for i in 1:5
+            @test occursin("Motif $i", output)
+        end
+    end
+
+    @testset "multi-logo single element" begin
+        pfm = [0.7 0.1; 0.1 0.7; 0.1 0.1; 0.1 0.1]
+        buf = IOBuffer()
+        @test logoshow(buf, [pfm]; names=["Only"]) === nothing
+        @test occursin("Only", String(take!(buf)))
+    end
+
+    @testset "multi-logo mismatched names throws" begin
+        pfm = [0.7 0.1; 0.1 0.7; 0.1 0.1; 0.1 0.1]
+        @test_throws AssertionError logoshow(IOBuffer(), [pfm, pfm]; names=["one"])
+    end
+
+    @testset "multi-logo empty vector throws" begin
+        @test_throws AssertionError logoshow(IOBuffer(), Matrix{Float64}[])
+    end
 end

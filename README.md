@@ -75,6 +75,50 @@ w
 Letters whose frequency barely exceeds the background will be drawn shorter,
 making the logo more informative for GC-rich or AT-rich genomes.
 
+### Multiple logos
+
+Display several motifs side-by-side with auto-numbered or custom titles:
+
+```julia
+# rows = [A, C, G, T]
+# TATA-box: T-A-T-A (with noise)
+tata = [0.08 0.85 0.05 0.88;   # A
+        0.06 0.04 0.08 0.03;   # C
+        0.04 0.06 0.07 0.05;   # G
+        0.82 0.05 0.80 0.04]   # T
+
+# CCGCC: C-C-G-C-C (with noise)
+ccgcc = [0.03 0.04 0.02 0.05 0.02;  # A
+         0.90 0.88 0.03 0.87 0.91;  # C
+         0.04 0.05 0.92 0.04 0.04;  # G
+         0.03 0.03 0.03 0.04 0.03]  # T
+
+# CG dinucleotide: C-G (with noise)
+cg = [0.03 0.04;   # A
+      0.92 0.04;   # C
+      0.03 0.91;   # G
+      0.02 0.01]   # T
+
+# Auto-numbered titles ("Motif 1", "Motif 2", …)
+logoshow([tata, ccgcc, cg])
+
+# Custom names
+logoshow([tata, ccgcc, cg]; names=["TATA-box", "CCGCC", "CG-rich"])
+```
+![demo](docs/src/demo_multi.png)
+
+```
+# Control layout: 2 logos per row, 5-column gap
+logoshow([tata, ccgcc, cg]; per_row=2, gap=5)
+```
+![demo](docs/src/demo_multi_2.png)
+
+| Keyword | Default | Description |
+|---------|---------|-------------|
+| `names` | `nothing` | Vector of title strings, or `nothing` for auto-numbered |
+| `per_row` | `3` | Maximum number of logos per row |
+| `gap` | `3` | Blank columns between side-by-side logos |
+
 ## Colours
 
 | Letter | Colour |
